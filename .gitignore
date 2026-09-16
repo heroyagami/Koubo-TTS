@@ -2,6 +2,12 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+.env
+.venv/
+out/
+*.mp3
+*.srt
+*_alignment.json
 
 # 默认不提交实际案例素材和生成稿，防止隐私材料误传。
 原始案例素材库/

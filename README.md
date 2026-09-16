@@ -1,6 +1,6 @@
 # Koubo-TTS
 
-面向法律案例短视频的可移植口播稿生产流程。
+面向法律案例短视频的可移植口播稿生产、Fish Audio 配音和 Whisper 字幕流程。
 
 这套仓库把案例读取、事实核验、口播改写、画面节点、进度管理和断点续写整理成一个可安装的 Codex / Claude Code Skill。它不会包含案件原文、当事人资料、照片或任何本机绝对路径。
 
@@ -13,6 +13,9 @@
 - 强制核验金额、日期、案号、审级、裁判结果和法律适用时点
 - 每篇输出标题、封面短句、口播稿、画面节点、事实核验和来源路径
 - 每篇完成后更新进度表和续写指针，换电脑或换对话也能继续
+- 只有标记为 `审核状态：已审核` 的稿件才进入 Fish Audio
+- 先生成真实 MP3，再用 Whisper small 反推 SRT 时间轴
+- 支持断点续跑、指定 A 编号、原稿文字回填字幕和对齐报告
 
 ## 安装 Skill
 
@@ -60,6 +63,87 @@ python scripts/validate_case_project.py "D:\我的案例口播项目"
 ```
 
 检查程序会核对正式稿编号、必要章节、来源路径字段以及进度指针，不会修改文件。
+
+## 配音与字幕
+
+### 1. 安装依赖
+
+需要 Python 3.10+ 和 FFmpeg。克隆仓库后：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+确认 FFmpeg 可用：
+
+```powershell
+ffmpeg -version
+ffprobe -version
+```
+
+如果 FFmpeg 没有加入 `PATH`，运行脚本时可传入 `--ffmpeg` 和 `--ffprobe`。
+
+### 2. 配置 Fish Audio
+
+复制 `.env.example` 为 `.env`，在本机填写：
+
+```text
+FISH_AUDIO_API_KEY=你的API密钥
+FISH_AUDIO_REFERENCE_ID=你的声音reference_id
+FISH_AUDIO_MODEL=s2.1-pro-free
+```
+
+`.env` 已被 Git 忽略，不会上传。仓库不包含任何 API Key 或私人声音的 `reference_id`。
+
+### 3. 审核稿件
+
+正式稿必须包含以下结构之一：
+
+```markdown
+审核状态：已审核
+
+## 口播稿
+
+这里是配音正文。
+
+## 来源
+```
+
+案例稿也支持 `## 完整口播稿`。脚本只把口播段落送入 Fish Audio；标题、来源、事实核验和画面提示不会送入。
+
+### 4. 执行
+
+```powershell
+python scripts/tts_batch.py `
+  --script-dir "D:\案例口播项目\正式稿" `
+  --out-dir "D:\案例口播项目\配音字幕\out" `
+  --only A127
+```
+
+常用命令：
+
+```powershell
+# 只检查计划，不调用 API
+python scripts/tts_batch.py --script-dir "D:\项目\正式稿" --dry-run
+
+# 默认断点续跑
+python scripts/tts_batch.py --script-dir "D:\项目\正式稿" --out-dir "D:\项目\out" --resume
+
+# 强制重做
+python scripts/tts_batch.py --script-dir "D:\项目\正式稿" --out-dir "D:\项目\out" --no-resume
+```
+
+生成文件：
+
+```text
+A127__<reference前8位>_full.mp3
+A127__<reference前8位>_full.srt
+A127__<reference前8位>_alignment.json
+```
+
+Whisper 识别文本只用于取得真实音频时间边界，最终 SRT 文字来自已审核原稿，不按文本长度估算时间。
 
 ## 推荐提示词
 
