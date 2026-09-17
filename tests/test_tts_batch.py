@@ -43,5 +43,21 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(tts_batch.load_env_file(path)["FISH_AUDIO_API_KEY"], "secret")
 
 
+class CaptionPunctuationTests(unittest.TestCase):
+    def test_strips_caption_ending_punctuation_by_default(self):
+        self.assertEqual(tts_batch.caption_display_text("为什么？"), "为什么")
+        self.assertEqual(tts_batch.caption_display_text("净身出户。"), "净身出户")
+        self.assertEqual(tts_batch.caption_display_text("他说「可以。」"), "他说「可以」")
+
+    def test_can_preserve_caption_ending_punctuation(self):
+        self.assertEqual(
+            tts_batch.caption_display_text("为什么？", strip_ending_punctuation=False),
+            "为什么？",
+        )
+
+    def test_punctuation_only_caption_becomes_empty(self):
+        self.assertEqual(tts_batch.caption_display_text("。"), "")
+
+
 if __name__ == "__main__":
     unittest.main()

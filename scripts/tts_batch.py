@@ -209,23 +209,40 @@ def split_caption_text(text: str, max_chars: int = 24) -> list[tuple[int, int, s
     return spans
 
 
-def source_locked_srt(source: str, asr_srt: str, min_confidence: float = 0.55) -> tuple[str, float, list[int]]:
+def caption_display_text(text: str, strip_ending_punctuation: bool = True) -> str:
+    """只清理字幕末尾标点；TTS 原文保持不变，以保留停顿和语气。"""
+    if not strip_ending_punctuation:
+        return text
+    return re.sub(r"[。！？!?；;，,：:、…]+([」』”’）】》]*)$", r"\1", text).strip()
+
+
+def source_locked_srt(
+    source: str,
+    asr_srt: str,
+    min_confidence: float = 0.55,
+    strip_ending_punctuation: bool = True,
+) -> tuple[str, float, list[int]]:
     timed_chars = parse_asr_srt(asr_srt)
     char_times, confidence = align_source_times(source, timed_chars)
     cues = []
     review: list[int] = []
     previous_end = 0.0
-    for cue_index, (start_index, end_index, text) in enumerate(split_caption_text(source), 1):
+    for start_index, end_index, text in split_caption_text(source):
         relevant = [char_times[i] for i in range(start_index, end_index) if i in char_times]
         if relevant:
             start, end = relevant[0][0], relevant[-1][1]
         else:
             start = end = previous_end
+        rendered_text = caption_display_text(text, strip_ending_punctuation)
+        if not rendered_text:
+            continue
+        cue_index = len(cues) + 1
+        if not relevant:
             review.append(cue_index)
         start = max(previous_end, start)
         end = max(start + 0.12, end)
         previous_end = end
-        cues.append(f"{cue_index}\n{format_srt_time(start)} --> {format_srt_time(end)}\n{text}")
+        cues.append(f"{cue_index}\n{format_srt_time(start)} --> {format_srt_time(end)}\n{rendered_text}")
     if confidence < min_confidence:
         review = list(range(1, len(cues) + 1))
     return "\n\n".join(cues) + "\n", confidence, review
@@ -323,6 +340,7 @@ def process_one(
     resume: bool,
     ffmpeg_path: Path,
     ffprobe_path: Path,
+    strip_caption_ending_punctuation: bool,
 ) -> str:
     """处理一篇。返回 'done' | 'skipped' | 'failed'。"""
     code, output_stem = parse_identity(md_path)
@@ -379,13 +397,18 @@ def process_one(
     t0 = time.time()
     raw_srt_text = run_whisper(mp3, ffmpeg_path)
     if raw_srt_text:
-        final_srt, confidence, review = source_locked_srt(display_script(text), raw_srt_text)
+        final_srt, confidence, review = source_locked_srt(
+            display_script(text),
+            raw_srt_text,
+            strip_ending_punctuation=strip_caption_ending_punctuation,
+        )
         srt.write_text(final_srt, encoding="utf-8")
         report.write_text(json.dumps({
             "source": str(md_path),
             "audio": str(mp3),
             "asr_timing_source": "whisper temporary output (not retained)",
             "subtitle_text_source": "approved_script",
+            "caption_ending_punctuation": "stripped" if strip_caption_ending_punctuation else "preserved",
             "alignment_confidence": round(confidence, 4),
             "review_cues": review,
             "source_mtime_ns": md_path.stat().st_mtime_ns,
@@ -408,6 +431,11 @@ def main():
     ap.add_argument("--no-resume", dest="resume", action="store_false")
     ap.add_argument("--only", nargs="*", help="只跑指定 A 编号（如 A002 A005）")
     ap.add_argument("--dry-run", action="store_true", help="只列计划不跑")
+    ap.add_argument(
+        "--keep-caption-ending-punctuation",
+        action="store_true",
+        help="保留每条字幕末尾标点；默认去掉句末标点，但配音原文标点仍保留",
+    )
     args = ap.parse_args()
 
     script_dir = Path(args.script_dir)
@@ -456,7 +484,17 @@ def main():
     for i, md in enumerate(targets, 1):
         code, _ = parse_identity(md)
         print(f"\n=== [{i}/{len(targets)}] {code}  ({md.name}) ===")
-        result = process_one(md, voice_id, key, model, out_dir, args.resume, ffmpeg_path, ffprobe_path)
+        result = process_one(
+            md,
+            voice_id,
+            key,
+            model,
+            out_dir,
+            args.resume,
+            ffmpeg_path,
+            ffprobe_path,
+            not args.keep_caption_ending_punctuation,
+        )
         print(f"  → {result}")
         (done if result == "done" else skipped if result == "skipped" else pending if result == "pending" else failed).append(code)
 

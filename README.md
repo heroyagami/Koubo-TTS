@@ -13,6 +13,7 @@
 - Fish Audio 分块配音，模型通过 HTTP header 传递
 - Whisper small 从真实音频反推时间轴
 - 最终 SRT 文字来自已审核原稿，ASR 只提供时间边界
+- 默认去掉每条字幕末尾的标点，但TTS仍使用带标点原稿控制停顿和语气
 - 支持 `--only`、断点续跑和只续跑缺失字幕
 - 输出 MP3、SRT 和字幕对齐报告
 
@@ -228,6 +229,7 @@ A127__<reference前8位>_alignment.json
 | `--out-dir` | MP3、SRT 和报告输出目录 |
 | `--only A127 A128` | 只处理指定编号 |
 | `--dry-run` | 只显示计划，不调用 API |
+| `--keep-caption-ending-punctuation` | 保留字幕末尾标点；默认不保留 |
 | `--resume` | 断点续跑，默认启用 |
 | `--no-resume` | 强制重做 |
 | `--voice-id` | 临时覆盖 `FISH_AUDIO_REFERENCE_ID` |
@@ -259,6 +261,10 @@ A127__<reference前8位>_alignment.json
 ### SRT 中有错字吗
 
 最终字幕文字来自审核后的口播稿，不直接采用 Whisper 的识别文字。仍应检查对齐报告中的 `review_cues`，并重点试听低置信度篇目。
+
+### 字幕末尾为什么没有标点
+
+这是默认的视频字幕显示规则。句号、逗号、问号等仍保留在送给 Fish Audio 的文本中，用于控制配音停顿和语气，只在最终 SRT 的每条字幕末尾隐藏。需要保留时增加 `--keep-caption-ending-punctuation`。
 
 ## 运行测试
 
