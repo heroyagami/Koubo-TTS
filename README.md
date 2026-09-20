@@ -16,6 +16,7 @@
 - 默认去掉每条字幕末尾的标点，但TTS仍使用带标点原稿控制停顿和语气
 - 支持 `--only`、断点续跑和只续跑缺失字幕
 - 输出 MP3、SRT 和字幕对齐报告
+- 输出文件名始终保留口播稿标题，不能只留下A编号和音色标识
 
 ## 项目结构
 
@@ -198,15 +199,15 @@ python scripts\tts_batch.py --script-dir "D:\项目\正式稿" --out-dir "D:\项
 
 ## 输出文件
 
-旧式文件名输出：
+普通正式稿输出：
 
 ```text
-A127__<reference前8位>_full.mp3
-A127__<reference前8位>_full.srt
-A127__<reference前8位>_alignment.json
+A127_拒绝亲子鉴定就一定会败诉吗口播稿__<reference前8位>_full.mp3
+A127_拒绝亲子鉴定就一定会败诉吗口播稿__<reference前8位>_full.srt
+A127_拒绝亲子鉴定就一定会败诉吗口播稿__<reference前8位>_alignment.json
 ```
 
-日期文件名会保留完整主文件名：
+日期文件名同样保留完整主文件名：
 
 ```text
 20260916-A127标题__<reference前8位>_full.mp3
@@ -220,6 +221,8 @@ A127__<reference前8位>_alignment.json
 - 字幕文字来源
 - 对齐置信度
 - 建议人工复核的字幕编号
+
+文件名中的中文标题直接来自已审核Markdown文件名，方便在资源管理器、剪辑软件和素材库中辨认内容。请在配音前先把正式稿文件名改成最终标题。
 
 ## 常用参数
 

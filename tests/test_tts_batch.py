@@ -9,10 +9,16 @@ import tts_batch
 
 class NamingAndApprovalTests(unittest.TestCase):
     def test_legacy_and_dated_names(self):
-        self.assertEqual(tts_batch.parse_identity(Path("A001_旧稿.md")), ("A001", "A001"))
+        self.assertEqual(tts_batch.parse_identity(Path("A001_旧稿.md")), ("A001", "A001_旧稿"))
         self.assertEqual(
             tts_batch.parse_identity(Path("20260901-A031公司赔偿.md")),
             ("A031", "20260901-A031公司赔偿"),
+        )
+
+    def test_output_stem_keeps_readable_title(self):
+        self.assertEqual(
+            tts_batch.parse_identity(Path("A127_拒绝亲子鉴定就一定会败诉吗口播稿.md")),
+            ("A127", "A127_拒绝亲子鉴定就一定会败诉吗口播稿"),
         )
 
     def test_requires_exact_approval_status(self):

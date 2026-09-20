@@ -88,7 +88,7 @@ def parse_identity(md_path: Path) -> tuple[str, str]:
         return dated.group(2), stem
     legacy = LEGACY_NAME_RE.match(stem)
     if legacy:
-        return legacy.group(1), legacy.group(1)
+        return legacy.group(1), stem
     raise ValueError(f"{md_path.name}: 文件名必须是 A###_标题.md 或 YYYYMMDD-A###标题.md")
 
 
