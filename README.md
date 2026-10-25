@@ -193,11 +193,31 @@ python scripts\tts_batch.py `
 python scripts\tts_batch.py --script-dir "D:\项目\正式稿" --out-dir "D:\项目\out" --resume
 ```
 
-- MP3、SRT 和对齐报告均存在，且比稿件新：整篇跳过
-- MP3 已存在但字幕缺失：复用 MP3，只重新运行 Whisper
+- 只有口播正文、MP3、SRT 的 SHA-256 与对齐报告一致，且匹配度至少90%、无待复核条目，才整篇跳过
+- 音频内容指纹与原稿记录一致但字幕缺失：复用 MP3，只重新运行 Whisper
+- 旧音频缺少指纹、或原稿已改动：提示复核，不能根据修改时间自动认定可以复用
 - 使用 `--no-resume`：强制重新生成
 
 ## 输出文件
+
+### 历史产物全量检查
+
+```powershell
+python scripts/audit_subtitles.py "D:\我的案例口播项目"
+python scripts/audit_subtitles.py "D:\我的案例口播项目" --repair
+```
+
+逐份检查正式稿、同名音频、字幕文本、字幕重叠和音频总时长，结果保存到项目内 `配音字幕/字幕全量核查报告.json`。
+修复只适用于文字匹配度至少90%、时长合理的条目；修改前自动备份字幕及原报告。匹配度低、版本不同或缺少源稿时保留原文件并列为需复核。
+若有保存的 Whisper 逐词时间数据，优先用于重建时间轴；否则沿用旧识别时间边界。自动检查通过不等于逐句试听通过。
+
+需要独立核对可疑音频时：
+
+```powershell
+python scripts/recheck_audio.py "D:\我的案例口播项目" A018 A124
+```
+
+该命令使用本地 Whisper small 重新识别，结果保存到 `配音字幕/音频复核`，不调用配音服务。完成后再次运行核查命令，会优先使用这份独立识别数据；音色试听和临时输出也会列入检查。依赖已包含 `imageio-ffmpeg`。
 
 普通正式稿输出：
 

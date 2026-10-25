@@ -19,6 +19,7 @@ import re
 import io
 import sys
 import json
+import hashlib
 import time
 import shutil
 import argparse
@@ -29,6 +30,7 @@ import urllib.error
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
+from opencc import OpenCC
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = PROJECT_ROOT / "正式稿"
@@ -38,6 +40,7 @@ LEGACY_NAME_RE = re.compile(r"^(A\d{3,})(?:_|-|｜)?(.+)$")
 DATED_NAME_RE = re.compile(r"^(\d{8})-(A\d{3,})(.+)$")
 EMOTION_TOKEN_RE = re.compile(r"\[(?:excited|laughing|curious|sad|angry|fearful|surprised|calm|serious|whispering)\]", re.I)
 APPROVED_VALUE = "已审核"
+TRADITIONAL_TO_SIMPLIFIED = OpenCC('t2s')
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -71,7 +74,7 @@ def resolve_binary(name: str, override: str | None = None) -> Path:
 def extract_script(md_path: Path) -> str:
     md = md_path.read_text(encoding="utf-8")
     m = re.search(
-        r"^##\s*(?:完整)?\s*口播稿\s*$\r?\n(.*?)(?=^##(?:\s|$))",
+        r"^##\s*(?:完整)?\s*口播稿\s*$\r?\n(.*?)(?=^##(?:\s|$)|\Z)",
         md,
         re.MULTILINE | re.DOTALL,
     )
@@ -104,6 +107,22 @@ def display_script(text: str) -> str:
     return re.sub(r"[ \t]+", " ", EMOTION_TOKEN_RE.sub("", text)).strip()
 
 
+def text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def verified_outputs(report: Path, text: str, mp3: Path, srt: Path) -> bool:
+    try:
+        data = json.loads(report.read_text(encoding='utf-8'))
+        return (data.get('script_sha256') == text_hash(text)
+                and data.get('audio_sha256') == hashlib.sha256(mp3.read_bytes()).hexdigest()
+                and data.get('srt_sha256') == hashlib.sha256(srt.read_bytes()).hexdigest()
+                and data.get('alignment_confidence', 0) >= .90
+                and not data.get('review_cues'))
+    except (OSError, ValueError):
+        return False
+
+
 def normalize_char(char: str) -> str:
     return char.lower() if char.isalnum() or "\u4e00" <= char <= "\u9fff" else ""
 
@@ -122,6 +141,17 @@ def format_srt_time(value: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
 
+def valid_caption_timeline(srt: str, duration: float) -> bool:
+    intervals = [tuple(parse_srt_time(x) for x in pair) for pair in re.findall(
+        r'(\d\d:\d\d:\d\d,\d{3})\s*-->\s*(\d\d:\d\d:\d\d,\d{3})', srt)]
+    previous_end = 0.0
+    for start, end in intervals:
+        if start < previous_end - .001 or end <= start or end > duration + .25:
+            return False
+        previous_end = end
+    return bool(intervals) and abs(duration - previous_end) <= 2
+
+
 @dataclass
 class TimedChar:
     char: str
@@ -132,7 +162,7 @@ class TimedChar:
 def parse_asr_srt(srt_text: str) -> list[TimedChar]:
     """把 Whisper 临时 SRT 展开为带时间的识别字符，仅用于对齐。"""
     timed: list[TimedChar] = []
-    blocks = re.split(r"\r?\n\s*\r?\n", srt_text.strip())
+    blocks = re.split(r"\r?\n\s*\r?\n", TRADITIONAL_TO_SIMPLIFIED.convert(srt_text).strip())
     for block in blocks:
         lines = [line.strip() for line in block.splitlines() if line.strip()]
         time_index = next((i for i, line in enumerate(lines) if "-->" in line), None)
@@ -301,7 +331,8 @@ def run_whisper(mp3_path: Path, ffmpeg_path: Path) -> str | None:
             str(mp3_path),
             "--model", "small",
             "--language", "Chinese",
-            "--output_format", "srt",
+            "--output_format", "json",
+            "--word_timestamps", "True",
             "--output_dir", str(temp_dir),
             "--device", "cpu",
             "--task", "transcribe",
@@ -310,8 +341,12 @@ def run_whisper(mp3_path: Path, ffmpeg_path: Path) -> str | None:
             env = os.environ.copy()
             env["PATH"] = str(ffmpeg_path.parent) + os.pathsep + env.get("PATH", "")
             subprocess.run(cmd, timeout=900, check=True, capture_output=True, env=env)
-            generated = temp_dir / f"{mp3_path.stem}.srt"
-            return generated.read_text(encoding="utf-8-sig") if generated.exists() else None
+            generated = temp_dir / f"{mp3_path.stem}.json"
+            if not generated.exists():
+                return None
+            data = json.loads(generated.read_text(encoding='utf-8-sig'))
+            words = [word for segment in data.get('segments', []) for word in segment.get('words', [])]
+            return '\n\n'.join(f"{i}\n{format_srt_time(w['start'])} --> {format_srt_time(w['end'])}\n{w['word']}" for i, w in enumerate(words, 1))
         except subprocess.CalledProcessError as e:
             print(f"  [whisper ERR] {e.stderr.decode()[:200] if e.stderr else e}")
             return None
@@ -352,23 +387,31 @@ def process_one(
         print("  [WAIT] 审核状态不是‘已审核’，自动跳过，不配音")
         return "pending"
 
-    # 续跑判断：mp3 存在且 mtime 晚于 md 即跳过
+    text = extract_script(md_path)
+    # 仅通过内容指纹验证的产物可以直接跳过，文件时间不足以证明同版本。
     if (
         resume
         and mp3.exists()
         and srt.exists()
         and report.exists()
-        and min(mp3.stat().st_mtime_ns, srt.stat().st_mtime_ns, report.stat().st_mtime_ns)
-        > md_path.stat().st_mtime_ns
+        and verified_outputs(report, text, mp3, srt)
     ):
         return "skipped"
 
-    text = extract_script(md_path)
     chunks = split_chunks(text)
     print(f"  text: {len(text)} chars, {len(chunks)} chunks")
 
     # MP3 已成功而字幕缺失时，只续跑 ASR，避免重复调用 Fish Audio。
-    reuse_mp3 = resume and mp3.exists() and mp3.stat().st_mtime_ns > md_path.stat().st_mtime_ns
+    try:
+        prior = json.loads(report.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        prior = {}
+    reuse_mp3 = (resume and mp3.exists()
+                 and prior.get('script_sha256') == text_hash(text)
+                 and prior.get('audio_sha256') == hashlib.sha256(mp3.read_bytes()).hexdigest())
+    if resume and mp3.exists() and not reuse_mp3:
+        print('  [REVIEW] 旧音频缺少与当前口播稿一致的内容指纹；请先核查，或用 --no-resume 明确重新生成')
+        return 'failed'
     if reuse_mp3:
         print(f"  TTS: 复用已有 MP3（{mp3.stat().st_size//1024} KB），不重复调用 Fish Audio")
     else:
@@ -388,6 +431,8 @@ def process_one(
         final = b"".join(mp3_parts)
         out_dir.mkdir(parents=True, exist_ok=True)
         mp3.write_bytes(final)
+        report.write_text(json.dumps({'script_sha256': text_hash(text),
+            'audio_sha256': hashlib.sha256(final).hexdigest()}, indent=2), encoding='utf-8')
         tts_dur = time.time() - t0
         real_dur = get_mp3_duration(mp3, ffprobe_path) or 0
         print(f"  TTS: {len(final)//1024} KB, ~{real_dur:.1f}s audio, took {tts_dur:.1f}s")
@@ -397,11 +442,19 @@ def process_one(
     t0 = time.time()
     raw_srt_text = run_whisper(mp3, ffmpeg_path)
     if raw_srt_text:
+        _, raw_confidence = align_source_times(display_script(text), parse_asr_srt(raw_srt_text))
+        if raw_confidence < .90:
+            print(f'  [REVIEW] 音频识别与原稿匹配度仅 {raw_confidence:.1%}，保留原字幕，需复核')
+            return 'failed'
         final_srt, confidence, review = source_locked_srt(
             display_script(text),
             raw_srt_text,
             strip_ending_punctuation=strip_caption_ending_punctuation,
         )
+        duration = get_mp3_duration(mp3, ffprobe_path)
+        if duration is None or not valid_caption_timeline(final_srt, duration):
+            print('  [REVIEW] 字幕时间倒退、重叠或与音频时长不符，保留原字幕')
+            return 'failed'
         srt.write_text(final_srt, encoding="utf-8")
         report.write_text(json.dumps({
             "source": str(md_path),
@@ -412,6 +465,9 @@ def process_one(
             "alignment_confidence": round(confidence, 4),
             "review_cues": review,
             "source_mtime_ns": md_path.stat().st_mtime_ns,
+            "script_sha256": text_hash(text),
+            "audio_sha256": hashlib.sha256(mp3.read_bytes()).hexdigest(),
+            "srt_sha256": hashlib.sha256(srt.read_bytes()).hexdigest(),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  srt: {srt.stat().st_size} bytes, alignment={confidence:.1%}, review={review or '(无)'}, took {time.time()-t0:.1f}s")
         return "done"

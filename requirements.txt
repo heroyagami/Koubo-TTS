@@ -1,1 +1,4 @@
 openai-whisper
+mutagen
+opencc-python-reimplemented
+imageio-ffmpeg
