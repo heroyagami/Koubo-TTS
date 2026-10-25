@@ -91,6 +91,9 @@ def run(root, repair=False):
                 if confidence < .90:
                     needs_repair = True
             safe = safe and t.valid_caption_timeline(fixed, duration)
+            discrepancies = t.audio_discrepancies(source, chars) if timing_source == 'independent_audio_recheck' else []
+            row['audio_review_segments'] = discrepancies
+            safe = safe and not discrepancies
             row['status'] = '一致' if not needs_repair else ('可修复' if safe else '需复核')
             evidence_report = srt.parent / (stem + '_alignment.json')
             if not needs_repair and timing_source == 'existing_srt' and not evidence_report.exists():
@@ -111,6 +114,8 @@ def run(root, repair=False):
                 row['status'] = '已修复'
             if not needs_repair and abs(duration-end) > 2:
                 row['status'] = '需复核时长'
+            if discrepancies:
+                row['status'] = '音频疑似漏读或重复，需复核'
         except Exception as exc:
             row.update(status='需复核', error=str(exc))
         rows.append(row)
@@ -137,6 +142,11 @@ def run(root, repair=False):
              '自动通过仅表示文本与时间轴结构通过检查，不代表逐句试听验收。', '',
              '| 字幕 | 状态 | 原稿匹配度 | 重叠/倒退数 |', '|---|---|---:|---:|']
     lines += [f'| {r["file"]} | {r["status"]} | {r.get("confidence", "-")} | {r.get("overlaps", "-")} |' for r in rows]
+    lines += ['', '## 需要听音复核的片段', '', '以下为独立ASR检出的连续差异，可能是识别错误，也可能是音频漏读或重复；不可用字幕覆盖来证明音频正确。', '',
+              '| 文件 | 时间段 | 原稿文字 | 音频识别文字 |', '|---|---|---|---|']
+    for row in rows:
+        for issue in row.get('audio_review_segments', []):
+            lines.append(f'| {row["file"]} | {t.format_srt_time(issue["start"])}—{t.format_srt_time(issue["end"])} | {issue["expected"] or "（原稿无此段）"} | {issue["recognized"] or "（未识别到）"} |')
     lines += ['', '## 未生成音频的稿件', '', '仅列为生产进度，不判为字幕错误。', ''] + ['- ' + name for name in scripts_without_audio]
     target.with_suffix('.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
     from collections import Counter

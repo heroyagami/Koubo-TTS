@@ -82,6 +82,12 @@ class EnvironmentTests(unittest.TestCase):
         self.assertNotIn('**', result)
         self.assertEqual(review, [])
 
+    def test_repeated_audio_passage_requires_review_despite_high_global_match(self):
+        source = '法院能这么干吗' + '正文内容' * 30
+        raw = '1\n00:00:00,000 --> 00:00:30,000\n法院能这么干吗法院能这么干吗法院能这么干吗' + '正文内容'*30
+        chars = tts_batch.parse_asr_srt(raw)
+        self.assertTrue(tts_batch.audio_discrepancies(source, chars))
+
     def test_load_env_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env"

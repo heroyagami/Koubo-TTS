@@ -119,6 +119,7 @@ def verified_outputs(report: Path, text: str, mp3: Path, srt: Path) -> bool:
                 and data.get('audio_sha256') == hashlib.sha256(mp3.read_bytes()).hexdigest()
                 and data.get('srt_sha256') == hashlib.sha256(srt.read_bytes()).hexdigest()
                 and data.get('alignment_confidence', 0) >= .90
+                and not data.get('audio_review_segments')
                 and not data.get('review_cues'))
     except (OSError, ValueError):
         return False
@@ -182,6 +183,23 @@ def parse_asr_srt(srt_text: str) -> list[TimedChar]:
 
 def source_units(text: str) -> list[tuple[int, str]]:
     return [(index, normalize_char(char)) for index, char in enumerate(text) if normalize_char(char)]
+
+
+def audio_discrepancies(source: str, chars: list[TimedChar]) -> list[dict]:
+    """标出连续缺读/多读；短同音错字交给原稿纠正，长差异需要复核音频。"""
+    expected = ''.join(c for _, c in source_units(source))
+    recognized = ''.join(normalize_char(c.char) for c in chars)
+    issues = []
+    for tag, i, j, k, l in SequenceMatcher(None, expected, recognized, autojunk=False).get_opcodes():
+        if tag == 'equal' or max(j-i, l-k) < 8:
+            continue
+        a, b = expected[i:j], recognized[k:l]
+        if re.fullmatch(r'[零〇一二三四五六七八九十百千万亿两0-9]+', a+b):
+            continue
+        issues.append(dict(expected=a, recognized=b,
+            start=round(chars[min(k, len(chars)-1)].start, 3) if chars else 0,
+            end=round(chars[min(max(k,l-1), len(chars)-1)].end, 3) if chars else 0))
+    return issues
 
 
 def align_source_times(source: str, asr_chars: list[TimedChar]) -> tuple[dict[int, tuple[float, float]], float]:
@@ -443,9 +461,15 @@ def process_one(
     t0 = time.time()
     raw_srt_text = run_whisper(mp3, ffmpeg_path)
     if raw_srt_text:
-        _, raw_confidence = align_source_times(display_script(text), parse_asr_srt(raw_srt_text))
-        if raw_confidence < .90:
-            print(f'  [REVIEW] 音频识别与原稿匹配度仅 {raw_confidence:.1%}，保留原字幕，需复核')
+        raw_chars = parse_asr_srt(raw_srt_text)
+        _, raw_confidence = align_source_times(display_script(text), raw_chars)
+        discrepancies = audio_discrepancies(display_script(text), raw_chars)
+        if raw_confidence < .90 or discrepancies:
+            report.write_text(json.dumps(dict(source=str(md_path), audio=str(mp3),
+                script_sha256=text_hash(text), audio_sha256=hashlib.sha256(mp3.read_bytes()).hexdigest(),
+                alignment_confidence=raw_confidence, verification_status='needs_review',
+                audio_review_segments=discrepancies), ensure_ascii=False, indent=2), encoding='utf-8')
+            print(f'  [REVIEW] 匹配度 {raw_confidence:.1%}，连续差异 {len(discrepancies)}处；保留原字幕，复核音频')
             return 'failed'
         final_srt, confidence, review = source_locked_srt(
             display_script(text),
