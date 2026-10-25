@@ -75,6 +75,13 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIn('账户余额只有262元', result)
         self.assertNotIn('魚兒', result)
 
+    def test_markdown_and_standalone_quote_do_not_create_review_cues(self):
+        source = tts_batch.display_script('**正文。**"')
+        raw = '1\n00:00:00,000 --> 00:00:02,000\n正文\n'
+        result, _, review = tts_batch.source_locked_srt(source, raw)
+        self.assertNotIn('**', result)
+        self.assertEqual(review, [])
+
     def test_load_env_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env"

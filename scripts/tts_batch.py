@@ -103,8 +103,9 @@ def is_approved(md_path: Path) -> bool:
 
 
 def display_script(text: str) -> str:
-    """字幕事实源：仅移除 TTS 控制标记，不改写原稿文字。"""
-    return re.sub(r"[ \t]+", " ", EMOTION_TOKEN_RE.sub("", text)).strip()
+    """字幕事实源：移除控制标记和 Markdown 排版，不改写原稿文字。"""
+    clean = EMOTION_TOKEN_RE.sub('', text).replace('**', '').replace('`', '')
+    return re.sub(r"[ \t]+", " ", clean).strip()
 
 
 def text_hash(text: str) -> str:
@@ -264,7 +265,7 @@ def source_locked_srt(
         else:
             start = end = previous_end
         rendered_text = caption_display_text(text, strip_ending_punctuation)
-        if not rendered_text:
+        if not rendered_text or not source_units(rendered_text):
             continue
         cue_index = len(cues) + 1
         if not relevant:
@@ -387,7 +388,7 @@ def process_one(
         print("  [WAIT] 审核状态不是‘已审核’，自动跳过，不配音")
         return "pending"
 
-    text = extract_script(md_path)
+    text = extract_script(md_path).replace('**', '').replace('`', '')
     # 仅通过内容指纹验证的产物可以直接跳过，文件时间不足以证明同版本。
     if (
         resume

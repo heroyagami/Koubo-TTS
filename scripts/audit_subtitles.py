@@ -85,10 +85,16 @@ def run(root, repair=False):
             needs_repair = actual != expected or overlaps > 0 or (timing_source != 'existing_srt' and abs(duration-end) > 2)
             if timing_source != 'existing_srt':
                 safe = confidence >= .90 and abs(duration-max(c.end for c in chars)) <= 2 and not review
+                # 正文一致也可能是按字数伪造的时间轴；独立逐词识别优先。
+                if original_raw.strip() != fixed.strip():
+                    needs_repair = True
                 if confidence < .90:
                     needs_repair = True
             safe = safe and t.valid_caption_timeline(fixed, duration)
             row['status'] = '一致' if not needs_repair else ('可修复' if safe else '需复核')
+            evidence_report = srt.parent / (stem + '_alignment.json')
+            if not needs_repair and timing_source == 'existing_srt' and not evidence_report.exists():
+                row['status'] = '文本一致，时间轴来源待核验'
             if repair and needs_repair and safe:
                 backup.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(srt, backup / srt.name)
