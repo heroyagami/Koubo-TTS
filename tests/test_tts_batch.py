@@ -57,11 +57,13 @@ class EnvironmentTests(unittest.TestCase):
             audio.write_bytes(b'audio')
             srt.write_bytes(b'captions')
             data = dict(script_sha256=tts_batch.text_hash('正文'),
+                        caption_punctuation_policy=tts_batch.caption_punctuation_policy(),
                         audio_sha256=hashlib.sha256(audio.read_bytes()).hexdigest(),
                         srt_sha256=hashlib.sha256(srt.read_bytes()).hexdigest(),
                         alignment_confidence=.97, review_cues=[])
             report.write_text(json.dumps(data), encoding='utf-8')
             self.assertTrue(tts_batch.verified_outputs(report, '正文', audio, srt))
+            self.assertFalse(tts_batch.verified_outputs(report, '正文', audio, srt, False))
             self.assertFalse(tts_batch.verified_outputs(report, '改了正文', audio, srt))
             srt.write_bytes(b'wrong subtitles')
             self.assertFalse(tts_batch.verified_outputs(report, '正文', audio, srt))
@@ -104,15 +106,29 @@ class CaptionPunctuationTests(unittest.TestCase):
         self.assertFalse(tts_batch.valid_caption_timeline(bad, 3.1))
 
     def test_strips_caption_ending_punctuation_by_default(self):
-        self.assertEqual(tts_batch.caption_display_text("为什么？"), "为什么")
+        self.assertEqual(tts_batch.caption_display_text("为什么？"), "为什么？")
         self.assertEqual(tts_batch.caption_display_text("净身出户。"), "净身出户")
         self.assertEqual(tts_batch.caption_display_text("他说「可以。」"), "他说「可以」")
+
+    def test_preserves_expressive_punctuation_and_internal_content(self):
+        for text in ['为什么？', '真的！', 'Why?', 'Stop!', '等等……', '等等...', '注意：', '一项；', '他说“为什么？”', '价格3.14元，合计6.28元', '《民法典》']:
+            self.assertEqual(tts_batch.caption_display_text(text), text)
+        self.assertEqual(tts_batch.caption_display_text('句内，保留。'), '句内，保留')
+        self.assertEqual(tts_batch.caption_display_text('结束.'), '结束')
 
     def test_can_preserve_caption_ending_punctuation(self):
         self.assertEqual(
             tts_batch.caption_display_text("为什么？", strip_ending_punctuation=False),
             "为什么？",
         )
+
+    def test_source_locked_output_keeps_closing_quotes(self):
+        raw = '1\n00:00:00,000 --> 00:00:02,000\n他说为什么\n'
+        result, _, _ = tts_batch.source_locked_srt('他说“为什么？”', raw)
+        self.assertIn('他说“为什么？”', result)
+        spans = tts_batch.split_caption_text('很'*24 + '。' + '”')
+        self.assertEqual(len(spans), 1)
+        self.assertTrue(spans[0][2].endswith('。”'))
 
     def test_punctuation_only_caption_becomes_empty(self):
         self.assertEqual(tts_batch.caption_display_text("。"), "")

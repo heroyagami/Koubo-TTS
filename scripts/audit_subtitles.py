@@ -107,6 +107,7 @@ def run(root, repair=False):
                 srt.write_text(fixed, encoding='utf-8')
                 report.write_text(json.dumps(dict(source=str(md), audio=str(audio),
                     subtitle_text_source='source_script', alignment_confidence=confidence,
+                    caption_punctuation_policy=t.caption_punctuation_policy(),
                     review_cues=review, source_sha256=digest(md), audio_sha256=digest(audio),
                     verification='ASR text alignment; not an independent listening review',
                     timing_source=timing_source,

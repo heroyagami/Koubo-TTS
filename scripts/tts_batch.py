@@ -112,10 +112,11 @@ def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def verified_outputs(report: Path, text: str, mp3: Path, srt: Path) -> bool:
+def verified_outputs(report: Path, text: str, mp3: Path, srt: Path, strip_ending_punctuation: bool = True) -> bool:
     try:
         data = json.loads(report.read_text(encoding='utf-8'))
         return (data.get('script_sha256') == text_hash(text)
+                and data.get('caption_punctuation_policy') == caption_punctuation_policy(strip_ending_punctuation)
                 and data.get('audio_sha256') == hashlib.sha256(mp3.read_bytes()).hexdigest()
                 and data.get('srt_sha256') == hashlib.sha256(srt.read_bytes()).hexdigest()
                 and data.get('alignment_confidence', 0) >= .90
@@ -243,12 +244,14 @@ def split_caption_text(text: str, max_chars: int = 24) -> list[tuple[int, int, s
             continue
         line_offset = match.start() + len(match.group()) - len(match.group().lstrip())
         cursor = 0
-        for sentence in re.finditer(r".+?(?:[。！？!?；;，,：:]|$)", line):
+        for sentence in re.finditer(r'''.+?(?:[。！？!?；;，,：:][」』”’）)\]】》〉"']*|$)''', line):
             piece = sentence.group().strip()
             if not piece:
                 continue
             local_start = sentence.start() + len(sentence.group()) - len(sentence.group().lstrip())
             while len(piece) > max_chars:
+                if not source_units(piece[max_chars:]):
+                    break  # 闭引号等跟随前文，不能切成随后被丢弃的独立字幕。
                 cut = max_chars
                 spans.append((line_offset + local_start + cursor, line_offset + local_start + cursor + cut, piece[:cut]))
                 piece, cursor = piece[cut:], cursor + cut
@@ -258,11 +261,15 @@ def split_caption_text(text: str, max_chars: int = 24) -> list[tuple[int, int, s
     return spans
 
 
+def caption_punctuation_policy(strip_ending_punctuation: bool = True) -> str:
+    return 'omit_terminal_comma_period_v2' if strip_ending_punctuation else 'preserve_all_v2'
+
+
 def caption_display_text(text: str, strip_ending_punctuation: bool = True) -> str:
-    """只清理字幕末尾标点；TTS 原文保持不变，以保留停顿和语气。"""
+    """末尾只省略逗号/句号，保留语气标点、引号、句内标点和小数。"""
     if not strip_ending_punctuation:
         return text
-    return re.sub(r"[。！？!?；;，,：:、…]+([」』”’）】》]*)$", r"\1", text).strip()
+    return re.sub(r'''(?:[。，,．]+|(?<!\.)\.(?!\.))([」』”’）)\]】》〉"']*)$''', r"\1", text).strip()
 
 
 def source_locked_srt(
@@ -413,7 +420,7 @@ def process_one(
         and mp3.exists()
         and srt.exists()
         and report.exists()
-        and verified_outputs(report, text, mp3, srt)
+        and verified_outputs(report, text, mp3, srt, strip_caption_ending_punctuation)
     ):
         return "skipped"
 
@@ -486,7 +493,8 @@ def process_one(
             "audio": str(mp3),
             "asr_timing_source": "whisper temporary output (not retained)",
             "subtitle_text_source": "approved_script",
-            "caption_ending_punctuation": "stripped" if strip_caption_ending_punctuation else "preserved",
+            "caption_ending_punctuation": "comma_period_omitted" if strip_caption_ending_punctuation else "preserved",
+            "caption_punctuation_policy": caption_punctuation_policy(strip_caption_ending_punctuation),
             "alignment_confidence": round(confidence, 4),
             "review_cues": review,
             "source_mtime_ns": md_path.stat().st_mtime_ns,
@@ -515,7 +523,7 @@ def main():
     ap.add_argument(
         "--keep-caption-ending-punctuation",
         action="store_true",
-        help="保留每条字幕末尾标点；默认去掉句末标点，但配音原文标点仍保留",
+        help="保留字幕末尾全部标点；默认仅省略逗号、句号，保留问号感叹号等；配音原文不变",
     )
     args = ap.parse_args()
 
